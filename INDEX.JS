@@ -1,10 +1,11 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const Nmap = require('node-nmap');
+const { URL } = require('url');
+const EmailValidator = require('email-validator');
 
 // Replace 'YOUR_TELEGRAM_BOT_TOKEN' with your actual Telegram bot token
-const bot = new TelegramBot('YOUR_TELEGRAM_BOT_TOKEN', { polling: true });
+const bot = new TelegramBot('5871264620:AAHzJB0P1vEDue0NCEY8DwNbC335PQokoAE', { polling: true });
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
@@ -30,38 +31,44 @@ bot.on('callback_query', async (query) => {
       const targetWebsite = msg.text.trim();
 
       try {
-        const response = await axios.get(targetWebsite);
-        const $ = cheerio.load(response.data);
-
         const emailList = [];
-        $('a[href^="mailto:"]').each((index, element) => {
-          const email = $(element).attr('href').replace('mailto:', '');
-          emailList.push(email);
-        });
+        const urlSet = new Set();
+        const baseURL = new URL(targetWebsite);
+
+        const processPage = async (pageUrl) => {
+          try {
+            const response = await axios.get(pageUrl);
+            const $ = cheerio.load(response.data);
+
+            $('a[href^="mailto:"]').each((index, element) => {
+              const email = $(element).attr('href').replace('mailto:', '');
+              if (EmailValidator.validate(email)) {
+                emailList.push(email);
+              }
+            });
+
+            $('a').each((index, element) => {
+              const href = $(element).attr('href');
+              if (href && !href.startsWith('mailto:') && !urlSet.has(href)) {
+                const absoluteURL = new URL(href, pageUrl);
+                if (absoluteURL.hostname.endsWith(baseURL.hostname)) {
+                  urlSet.add(href);
+                  processPage(absoluteURL.href);
+                }
+              }
+            });
+          } catch (error) {
+            console.error(`Error while scraping ${pageUrl}:`, error);
+          }
+        };
+
+        processPage(targetWebsite);
 
         const resultMessage = emailList.length > 0 ? `✉️ Found ${emailList.length} emails:\n\n${emailList.join('\n')}` : '❌ No emails found.';
         bot.sendMessage(chatId, resultMessage);
       } catch (error) {
         console.error('Error while scraping emails:', error);
         bot.sendMessage(chatId, '❌ Error occurred while scraping emails.');
-      }
-
-      try {
-        const nmapScan = new Nmap.NmapScan(targetWebsite);
-        nmapScan.on('complete', (data) => {
-          const openPorts = data[0].openPorts;
-          if (openPorts.length > 0) {
-            const resultMessage = `🔍 ${openPorts.length} open port(s) found: ${openPorts.join(', ')}`;
-            bot.sendMessage(chatId, resultMessage);
-          } else {
-            bot.sendMessage(chatId, '❌ No open ports found.');
-          }
-        });
-
-        nmapScan.startScan();
-      } catch (error) {
-        console.error('Error occurred while performing Nmap scan:', error);
-        bot.sendMessage(chatId, '❌ Error occurred while performing Nmap scan.');
       }
     });
   }
